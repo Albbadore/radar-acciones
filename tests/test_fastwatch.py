@@ -90,3 +90,30 @@ def test_parse_live():
                                     "lastTradeTimestamp": "Sep 24, 2026 5:04 AM ET"}})
     assert (q.price, q.change_pct, round(q.volume), q.source) == (4.5, 121.67, 8222162, "Nasdaq tiempo real")
     assert parse_live({"primaryData": {"lastSalePrice": ""}}) is None and parse_live(None) is None
+
+
+class TestRunSlices:
+    """Cloud mode: a slice stops by itself (GitHub kills jobs after 6 h)."""
+
+    def run(self, monkeypatch, cfg, phase, **kw):
+        import argparse
+        from radar import __main__ as cli
+        calls = []
+
+        class Svc:
+            db = Database(":memory:")
+
+        monkeypatch.setattr(cli, "build_services", lambda c: Svc())
+        monkeypatch.setattr(cli, "market_phase", lambda now, s: phase)
+        monkeypatch.setattr(cli, "run_cycle", lambda svc, now, ph: calls.append(ph) or {})
+        monkeypatch.setattr(cli.outcomes, "update_all", lambda *a: 0)
+        monkeypatch.setattr(cli, "_fast_watch_until", lambda *a: None)
+        cli.cmd_run(cfg, argparse.Namespace(**kw))
+        return calls
+
+    def test_stops_after_max_minutes(self, monkeypatch, cfg):
+        calls = self.run(monkeypatch, cfg, "regular", max_minutes=0.0005, exit_when_closed=True)
+        assert calls  # it returned: the slice ended by itself
+
+    def test_exits_when_market_closed(self, monkeypatch, cfg):
+        assert self.run(monkeypatch, cfg, "cerrado", max_minutes=60, exit_when_closed=True) == []

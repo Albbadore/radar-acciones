@@ -60,17 +60,17 @@ en otra.
 
 ## Sin tener el PC encendido (GitHub Actions)
 
-`.github/workflows/radar.yml` ejecuta `python -m radar once` cada hora en días
-laborables (04:05-19:05 hora de Nueva York) en los servidores de GitHub, gratis.
-El histórico (`radar.db`) se guarda en la rama `radar-data` del repositorio.
+El repositorio es público, así que GitHub Actions no tiene límite de minutos.
+`.github/workflows/radar.yml` ejecuta `python -m radar run` en la nube por tandas de
+hasta ~5,7 h (GitHub corta los trabajos a las 6 h): ciclo completo cada 5 min en
+sesión (10 min en premarket y after-hours) y ARRANQUE cada 90 s. Como GitHub retrasa
+o se salta disparos programados, se dispara cada 30 min; solo corre una tanda a la
+vez y la siguiente espera en cola. Fuera de horario cada tanda termina en ~1 min.
 
-1. Crear un repositorio **privado** en GitHub y subir este proyecto (sin `.env` ni `data/`).
-2. En el repositorio: Settings → Secrets and variables → Actions → New repository secret,
-   crear `SEC_USER_AGENT`, `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` con los valores de `.env`.
-3. Pestaña Actions → "Radar horario" → Run workflow, para probar.
+El histórico (`radar.db`) se guarda en la rama `radar-data` al terminar cada tanda.
+Las claves van en Settings → Secrets and variables → Actions:
+`SEC_USER_AGENT`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (nunca son visibles).
 
-Cada 30 minutos en vez de cada hora: cambiar el cron a `"5,35 8-23 * * 1-5"`.
-La alerta de ARRANQUE (cada 90 s) solo funciona con `python -m radar run`.
 No usar a la vez `run` en el PC y GitHub Actions: llegarían avisos duplicados.
 
 ## Cómo funciona un ciclo

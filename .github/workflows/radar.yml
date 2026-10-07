@@ -1,10 +1,15 @@
-name: Radar horario
+name: Radar continuo
 
-# Runs one scan per hour on weekdays, 04:05-19:05 New York time
-# (08:05-23:05 UTC in summer). GitHub may delay scheduled runs a few minutes.
+# Public repository: GitHub Actions minutes are free, so the radar runs
+# continuously in slices of up to ~5.7 h (a job may last at most 6 h):
+#   - full scan every 5 min in session, every 10 min pre/after hours
+#   - fast watch (ARRANQUE) every 90 s for ALTA/MAXIMA tickers
+# GitHub often delays or drops scheduled triggers, so they fire every 30 min:
+# only one slice runs at a time (concurrency) and a pending one starts as soon
+# as the current one ends. Outside market hours a slice exits in ~1 minute.
 on:
   schedule:
-    - cron: "5 8-23 * * 1-5"
+    - cron: "*/30 * * * 1-5"
   workflow_dispatch: {}   # manual "Run workflow" button
 
 concurrency:
@@ -15,9 +20,9 @@ permissions:
   contents: write   # to save the database in the radar-data branch
 
 jobs:
-  scan:
+  radar:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -37,12 +42,12 @@ jobs:
             git show origin/radar-data:radar.db > data/radar.db
           fi
 
-      - name: Scan
+      - name: Radar
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m radar once
+        run: python -m radar run --max-minutes 340 --exit-when-closed
 
       - name: Save history
         if: always()

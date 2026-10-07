@@ -56,11 +56,16 @@ def _fast_watch_until(watcher: FastWatcher | None, deadline: float, cfg: dict) -
 
 
 def cmd_run(cfg: dict, args: argparse.Namespace) -> None:
-    """Continuous loop following the market calendar."""
+    """Continuous loop following the market calendar.
+
+    --max-minutes and --exit-when-closed let a cloud job (GitHub Actions, max
+    6 h per job) run in slices: it stops on its own before being killed.
+    """
     svc = build_services(cfg)
     sched = cfg["schedule"]
     watcher = FastWatcher(svc.db, cfg) if cfg["fastwatch"]["enabled"] else None
     last_outcomes = datetime.min.replace(tzinfo=now_et().tzinfo)
+    stop_at = time.time() + args.max_minutes * 60 if args.max_minutes else None
     log.info("Radar en marcha. Ctrl+C para detener.")
     while True:
         now = now_et()
@@ -68,6 +73,12 @@ def cmd_run(cfg: dict, args: argparse.Namespace) -> None:
         scan = phase not in (PHASE_CLOSED,) and not (
             phase == PHASE_POSTMARKET and not sched["scan_postmarket"]
         )
+        if not scan and args.exit_when_closed:
+            log.info("Mercado cerrado (%s): fin de esta tanda", now.strftime("%Y-%m-%d %H:%M ET"))
+            break
+        if stop_at and time.time() >= stop_at:
+            log.info("Tiempo maximo de esta tanda alcanzado")
+            break
         if scan:
             try:
                 summary = run_cycle(svc, now, phase)
@@ -84,7 +95,10 @@ def cmd_run(cfg: dict, args: argparse.Namespace) -> None:
         wait = _interval(phase, sched) if scan else 15 * 60
         # Align to the interval grid (e.g. every 5 minutes on the clock).
         deadline = time.time() + max(30, wait - (time.time() % wait))
+        if stop_at:
+            deadline = min(deadline, stop_at)
         _fast_watch_until(watcher if scan else None, deadline, cfg)
+    svc.db.close()
 
 
 def cmd_once(cfg: dict, args: argparse.Namespace) -> None:
@@ -186,6 +200,11 @@ def main(argv: list[str] | None = None) -> None:
         p = sub.add_parser(name, help=help_text)
         if name == "scan":
             p.add_argument("--phase", choices=["premarket", "regular", "postmarket", "cerrado"])
+        if name == "run":
+            p.add_argument("--max-minutes", type=float, default=None,
+                           help="parar tras N minutos (ejecucion en la nube por tandas)")
+            p.add_argument("--exit-when-closed", action="store_true",
+                           help="terminar si el mercado esta cerrado")
         if name == "report":
             p.add_argument("--hit", type=float, default=analysis.DEFAULT_HIT_PCT)
             p.add_argument("--json", action="store_true")
