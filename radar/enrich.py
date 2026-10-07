@@ -117,6 +117,17 @@ def _extended(svc: Services, ticker: str, session: str, ttl: float,
         return None
 
 
+def _live(svc: Services, ticker: str, errors: list[str]) -> nasdaq.LiveQuote | None:
+    try:
+        quote = svc.cache.get_or_set(
+            f"live:{ticker}", EXTENDED_LIVE_TTL, lambda: nasdaq.fetch_live(ticker), cache_empty=False
+        )
+    except Exception as exc:
+        errors.append(f"Nasdaq tiempo real: {exc}")
+        return None
+    return quote if quote is not None and quote.price else None
+
+
 def _catalysts(svc: Services, ticker: str, cik: int | None, now: datetime) -> tuple:
     days = int(svc.cfg["sec"]["catalyst_lookback_days"])
     sec_items = []
@@ -175,9 +186,13 @@ def enrich(
     )
     ext_src = f"Nasdaq {SESSION_LABEL[ext.session]}" if ext else ""
 
+    live_q = _live(svc, ticker, errors) if phase == PHASE_REGULAR else None
+
     # ---- price
-    if phase == PHASE_REGULAR and row is not None and row.price:
-        price = _src(row.price, SRC_NASDAQ, stamp)
+    if live_q is not None:
+        price = _src(live_q.price, live_q.source, live_q.timestamp or stamp)
+    elif phase == PHASE_REGULAR and row is not None and row.price:
+        price = _src(row.price, row.source, stamp)
     elif ext is not None:
         price = _src(ext.last, ext_src, ext.updated or stamp)
     elif phase == PHASE_PREMARKET and intra.premarket_last:
@@ -197,7 +212,7 @@ def enrich(
     else:
         prev_sources = [_src(daily.get("prev_close"), SRC_YAHOO_DAILY, daily_as_of)]
     if phase == PHASE_REGULAR:
-        prev_sources.append(_src(row.prev_close if row else None, SRC_NASDAQ, stamp))
+        prev_sources.append(_src(row.prev_close if row else None, row.source if row else SRC_NASDAQ, stamp))
         prev_sources.append(_src(info.get("regularMarketPreviousClose"), SRC_YAHOO, stamp))
     elif phase == PHASE_PREMARKET:
         prev_sources.append(_src(ext.market_close if ext else None, "Nasdaq (ultimo cierre)", stamp))
@@ -229,8 +244,10 @@ def enrich(
         blocked = blocked or pm_check.suspicious
 
     # ---- volume
-    if phase == PHASE_REGULAR and row is not None and row.volume:
-        volume = _src(row.volume, SRC_NASDAQ, stamp)
+    if live_q is not None and live_q.volume:
+        volume = _src(live_q.volume, live_q.source, live_q.timestamp or stamp)
+    elif phase == PHASE_REGULAR and row is not None and row.volume:
+        volume = _src(row.volume, row.source, stamp)
     elif phase == PHASE_PREMARKET:
         volume = (_src(pm_volume.value, pm_volume.source, pm_volume.as_of, "volumen premarket acumulado")
                   if pm_volume else None)

@@ -25,6 +25,7 @@ class ScreenerRow:
     net_change: float | None
     volume: float | None
     market_cap: float | None
+    source: str = "Nasdaq screener"
 
     @property
     def prev_close(self) -> float | None:

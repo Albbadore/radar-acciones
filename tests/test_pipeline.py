@@ -62,6 +62,7 @@ def fake_yahoo(monkeypatch):
         "published": datetime(2026, 9, 24, 12, 0, tzinfo=ET), "url": "https://x"}])
     monkeypatch.setattr(yahoo, "intraday_bars", lambda ts, period="2d": {t: intraday_frame() for t in ts})
     monkeypatch.setattr(nasdaq, "fetch_extended", lambda t, s: None)
+    monkeypatch.setattr(nasdaq, "fetch_live", lambda t: None)
     monkeypatch.setattr(broker, "yahoo_isin", lambda t: "US0000000001")
     monkeypatch.setattr(broker, "check_ls", lambda t, n, i: broker.Availability(True, "LS test"))
 
@@ -199,3 +200,31 @@ def test_parse_nasdaq_extended():
     assert q.updated == "Sep 24, 2026 05:04 AM ET"
     assert parse_extended({"infoTable": {"rows": []}}, "pre") is None
     assert parse_extended(None, "post") is None
+
+
+class TestLiveData:
+    """SMXT 2026-10-06: the Nasdaq screener kept the previous close (2.37) all day."""
+
+    def test_live_rows_from_todays_bars(self):
+        from radar.live import LIVE_SOURCE, live_rows
+        stale = ScreenerRow("SMXT", "SMX", 2.37, 9.7, 0.21, 43_008, 5e6)
+        rows = live_rows([stale], {"SMXT": intraday_frame()}, {"SMXT": {"prev_close": 2.37}}, NOW.date())
+        assert rows[0].price == pytest.approx(6.08) and rows[0].source == LIVE_SOURCE
+        assert rows[0].change_pct == pytest.approx((6.08 / 2.37 - 1) * 100)
+        assert rows[0].volume == 3000 * 9 + 90000 + 120000 + 150000   # regular session only
+        assert live_rows([stale], {}, {"SMXT": {"prev_close": 2.37}}, NOW.date()) == []
+
+    def test_cycle_selects_mover_hidden_by_stale_screener(self, svc, fake_yahoo, monkeypatch):
+        stale = ScreenerRow("VWAV", "VisionWave", 5.2, 0.0, 0.0, 10_000, 13e6)   # yesterday's data
+        monkeypatch.setattr(scanner.nasdaq, "fetch_screener", lambda: [stale])
+        monkeypatch.setattr(scanner.rs_mod, "refresh_filings", lambda *a, **k: 0)
+        monkeypatch.setattr(scanner, "deliver", lambda text, cfg: ["log"])
+        out = scanner.run_cycle(svc, NOW, "regular")
+        snap = svc.db.snapshots_for_cycle(out["cycle_id"])[0]
+        assert snap["price"] == pytest.approx(6.08) and snap["change_pct"] > 10
+
+    def test_regular_session_prefers_nasdaq_real_time(self, svc, fake_yahoo, monkeypatch):
+        monkeypatch.setattr(nasdaq, "fetch_live",
+                            lambda t: nasdaq.LiveQuote(6.4, 23.0, 4_000_000, "Oct 6 1:15 PM ET", "Nasdaq tiempo real"))
+        data = enrich(svc, "VWAV", NOW, "regular", screener_row(), intraday_frame(), [])
+        assert data.price.source == "Nasdaq tiempo real" and data.volume.value == 4_000_000

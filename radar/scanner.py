@@ -12,6 +12,7 @@ from typing import Any
 from radar import candidates as cand_mod
 from radar import daily_cache
 from radar import reverse_splits as rs_mod
+from radar import live as live_mod
 from radar import tradable as tradable_mod
 from radar.alerts import KIND_WATCH, AlertState, decide_alert, format_alert
 from radar.clock import PHASE_POSTMARKET, PHASE_PREMARKET, PHASE_REGULAR, previous_trading_day
@@ -155,30 +156,38 @@ def run_cycle(svc: Services, now: datetime, phase: str) -> dict[str, Any]:
 
     rows_by_ticker = {}
     uni = []
+    live = []
+    bars_all: dict = {}
+    stats: dict = {}
     if phase in (PHASE_PREMARKET, PHASE_REGULAR, PHASE_POSTMARKET):
+        # The screener download only refreshes after the session: universe membership only.
         uni = cand_mod.universe(nasdaq.fetch_screener(), svc.cfg["universe"])
-        # In premarket the screener still shows yesterday: use it only for the universe.
-        if phase in (PHASE_REGULAR, PHASE_POSTMARKET):
-            rows_by_ticker = {r.ticker: r for r in uni}
         events = {t: rs_mod.resolve_event(None, rows, now.date()) for t, rows in rs_watch.items()}
         daily_cache.build(svc.db, [r.ticker for r in uni], now.date(),
                           {t: e for t, e in events.items() if e})
+        stats = svc.db.daily_stats(now.date().isoformat())
+        # Today's price and volume for every stock, from live 5-minute bars.
+        bars_all = yahoo.intraday_bars([r.ticker for r in uni], period="1d")
+        live = live_mod.live_rows(uni, bars_all, stats, now.date())
+        if phase in (PHASE_REGULAR, PHASE_POSTMARKET):
+            rows_by_ticker = {r.ticker: r for r in live}
 
     allowed = {r.ticker for r in uni}
     limit = int(svc.cfg["universe"]["max_candidates_per_cycle"])
     # Pre-select more than needed: most micro caps are not tradable at the broker (~85 %).
     wide = limit * 4
+    wide_cfg = {**svc.cfg["universe"], "max_candidates_per_cycle": wide}
     if phase in (PHASE_REGULAR, PHASE_POSTMARKET):
-        stats = svc.db.daily_stats(now.date().isoformat())
         tickers = cand_mod.select_candidates(
-            uni, stats, svc.cfg["universe"]["extra_watchlist"], rs_watch.keys(),
-            {**svc.cfg["universe"], "max_candidates_per_cycle": wide},
+            live, stats, svc.cfg["universe"]["extra_watchlist"], rs_watch.keys(), wide_cfg,
         )
         if phase == PHASE_POSTMARKET:
             # Most catalysts land after the close: re-check today's movers and detections.
             tickers = _watch_candidates(svc, now, allowed, first=tickers, limit=wide)
     elif phase == PHASE_PREMARKET:
-        tickers = _watch_candidates(svc, now, allowed, limit=wide)
+        # Premarket movers by price (Yahoo gives no extended-hours volume) + watchlists.
+        movers = cand_mod.select_candidates(live, stats, [], rs_watch.keys(), wide_cfg)
+        tickers = _watch_candidates(svc, now, allowed, first=movers, limit=wide)
     else:
         tickers = list(svc.cfg["universe"]["extra_watchlist"])
 
@@ -188,7 +197,8 @@ def run_cycle(svc: Services, now: datetime, phase: str) -> dict[str, Any]:
     )
 
     log.info("Ciclo %s (%s): %d candidatos", cycle_id, phase, len(tickers))
-    bars = yahoo.intraday_bars(tickers) if tickers else {}
+    missing = [t for t in tickers if t not in bars_all]
+    bars = {**bars_all, **(yahoo.intraday_bars(missing) if missing else {})}
 
     def work(ticker: str) -> tuple[StockData, ScoreResult] | None:
         try:
