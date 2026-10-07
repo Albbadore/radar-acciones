@@ -1,0 +1,148 @@
+# Configuracion del radar de movimientos especulativos.
+# Todos los umbrales y pesos son ajustables. Tras acumular historico,
+# usar `python -m radar report` para decidir ajustes con datos.
+
+db_path: data/radar.db
+cache_dir: data/cache
+log_file: data/alerts.log
+
+universe:
+  min_price: 0.05
+  max_price: 20.0
+  max_market_cap: 500000000      # 500M USD; 0/None = sin limite
+  candidate_min_rvol: 2.0        # preseleccion: volumen/media >= 2x
+  candidate_min_change_pct: 8.0  # preseleccion: subida >= 8 %
+  max_candidates_per_cycle: 80
+  extra_watchlist: []            # tickers que se analizan siempre
+
+broker:
+  # Analizar solo acciones que se pueden comprar en Trade Republic.
+  # Se comprueba en LS Exchange (donde Trade Republic ejecuta las acciones de
+  # EE. UU.) por ISIN y por ticker. Es una aproximacion: corrige con las listas.
+  only_tradable: true
+  recheck_days: 7
+  always_allow: []     # tickers que SI puedes comprar aunque no se detecten
+  always_block: []     # tickers que no quieres ver nunca
+  trading_hours_madrid: ["07:30", "23:00"]   # horario habitual de Trade Republic (L-V)
+
+fastwatch:
+  # Entre ciclos completos, vigila cada pocos segundos los valores en ALERTA ALTA/MAXIMA
+  # y avisa ("ARRANQUE") cuando empiezan a subir con volumen.
+  enabled: true
+  interval_seconds: 90
+  window_minutes: 10          # ventana en la que se mide la subida
+  min_gain_pct: 8             # subida minima en la ventana
+  min_window_volume_pct: 5    # volumen en la ventana >= 5 % de la media diaria 20d
+  cooldown_minutes: 60        # como mucho un ARRANQUE por valor cada hora
+
+schedule:
+  premarket_start: "04:00"
+  regular_open: "09:30"
+  regular_close: "16:00"
+  premarket_interval_min: 10
+  regular_interval_min: 5
+  outcomes_interval_min: 30
+  reverse_split_refresh_hours: 6
+  scan_postmarket: true         # 16:00-20:00 ET: muchas noticias salen tras el cierre
+  # Festivos NYSE/Nasdaq (mercado cerrado)
+  holidays:
+    - "2026-01-01"
+    - "2026-01-19"
+    - "2026-02-16"
+    - "2026-04-03"
+    - "2026-05-25"
+    - "2026-06-19"
+    - "2026-07-03"
+    - "2026-09-07"
+    - "2026-11-26"
+    - "2026-12-25"
+    - "2027-01-01"
+    - "2027-01-18"
+    - "2027-02-15"
+    - "2027-03-26"
+    - "2027-05-31"
+    - "2027-06-18"
+    - "2027-07-05"
+    - "2027-09-06"
+    - "2027-11-25"
+    - "2027-12-24"
+
+sec:
+  # La SEC exige un User-Agent con contacto. Definir la variable de entorno
+  # SEC_USER_AGENT, p. ej.: "MiRadar/1.0 nombre@dominio.com"
+  user_agent_env: SEC_USER_AGENT
+  min_interval_s: 0.15           # < 10 peticiones/segundo (limite SEC)
+  reverse_split_lookback_days: 180
+  reverse_split_max_docs_per_refresh: 400
+  catalyst_lookback_days: 7
+
+scoring:
+  reverse_split:              # 0-20
+    max: 20
+    # [dias desde el evento (<=), puntos]
+    executed_recency: [[5, 20], [15, 17], [30, 14], [60, 10], [90, 7], [180, 3]]
+    announced_recency: [[15, 15], [30, 12], [60, 8], [90, 5]]
+    proposed_recency: [[60, 5], [120, 3]]
+    # [ratio minimo (>=), factor]  ej. 1:20 -> ratio 20
+    ratio_factor: [[20, 1.0], [10, 0.95], [5, 0.85], [0, 0.7]]
+    unknown_ratio_factor: 0.8
+    active_min: 5
+  float:                      # 0-20
+    max: 20
+    # [acciones (<), puntos]
+    tiers: [[1000000, 20], [5000000, 16], [10000000, 12], [20000000, 6], [50000000, 2]]
+    active_min: 12
+  volume:                     # 0-25
+    max: 25
+    # [ratio vol/media20 (>=), puntos]
+    tiers: [[10, 25], [5, 20], [3, 14], [2, 6]]
+    premarket_bonus: 5
+    premarket_bonus_min_ratio: 0.5   # vol premarket >= 50 % de la media diaria
+    selloff_change_pct: -10          # volumen con caida <= -10 % no cuenta como senal
+    active_min: 14
+  catalyst:                   # 0-20
+    max: 20
+    impact_points: {alto: 14, medio: 9, bajo: 5}
+    official_bonus: 4
+    fresh_bonus: 2            # noticia <= 1 dia
+    extra_category_points: 2  # por cada categoria adicional (impacto medio/alto)
+    active_min: 8
+  price:                      # 0-15
+    max: 15
+    change_tiers: [[30, 9], [20, 7], [10, 5]]
+    premarket_tiers: [[10, 3]]
+    breakout_prev_high: 3
+    volume_acceleration: 2
+    volume_acceleration_min_ratio: 2.0
+    active_min: 5
+  confluence:
+    min_active_signals: 3
+    cap_below_min: 64         # sin 3 senales activas nunca llega a ALERTA
+    core_trio_bonus: 8        # reverse split + float + volumen
+    core_trio_catalyst_bonus: 15
+  late:
+    # Subida desde el minimo de las ultimas 5 sesiones (incluida la actual).
+    # El objetivo es detectar el COMIENZO del movimiento, no perseguirlo.
+    advanced_from_pct: 100     # >= +100 %: resta puntos
+    advanced_penalty: 10
+    late_from_pct: 200         # >= +200 %: nunca pasa de VIGILAR
+  levels:
+    maxima: 80
+    alta: 65
+    vigilar: 50
+
+alerts:
+  min_score: 65
+  cooldown_minutes: 30
+  major_change_score_delta: 10     # dentro del cooldown
+  major_change_price_pct: 20       # dentro del cooldown
+  repeat_score_delta: 5            # tras el cooldown
+  repeat_price_pct: 10             # tras el cooldown
+
+notify:
+  console: true
+  telegram: true   # solo si existen TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID
+
+dashboard:
+  host: 127.0.0.1
+  port: 8765

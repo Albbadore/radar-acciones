@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "radar-dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "radar", "dashboard"],
+      "port": 8765
+    }
+  ]
+}

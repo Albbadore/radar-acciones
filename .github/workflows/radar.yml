@@ -1,0 +1,60 @@
+name: Radar horario
+
+# Runs one scan per hour on weekdays, 04:05-19:05 New York time
+# (08:05-23:05 UTC in summer). GitHub may delay scheduled runs a few minutes.
+on:
+  schedule:
+    - cron: "5 8-23 * * 1-5"
+  workflow_dispatch: {}   # manual "Run workflow" button
+
+concurrency:
+  group: radar
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # to save the database in the radar-data branch
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore history (radar-data branch)
+        run: |
+          mkdir -p data
+          if git ls-remote --exit-code --heads origin radar-data >/dev/null; then
+            git fetch --depth 1 origin radar-data
+            git show origin/radar-data:radar.db > data/radar.db
+          fi
+
+      - name: Scan
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m radar once
+
+      - name: Save history
+        if: always()
+        run: |
+          [ -f data/radar.db ] || exit 0
+          python -c "import sqlite3; c=sqlite3.connect('data/radar.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
+          tmp=$(mktemp -d)
+          cp data/radar.db "$tmp/radar.db"
+          cd "$tmp"
+          git init -q -b radar-data
+          git config user.name "radar-bot"
+          git config user.email "radar-bot@users.noreply.github.com"
+          git add radar.db
+          git commit -q -m "data: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" radar-data
