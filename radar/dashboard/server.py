@@ -40,7 +40,8 @@ def latest(db: Database) -> dict[str, Any]:
 
 def ticker_detail(db: Database, ticker: str) -> dict[str, Any]:
     snaps = db.query(
-        "SELECT payload FROM snapshots WHERE ticker=? ORDER BY ts DESC LIMIT 1", (ticker,)
+        "SELECT payload FROM snapshots WHERE ticker=? AND payload IS NOT NULL ORDER BY ts DESC LIMIT 1",
+        (ticker,),
     )
     history = db.query(
         "SELECT ts, price, total, level FROM snapshots WHERE ticker=? ORDER BY ts DESC LIMIT 100",

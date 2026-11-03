@@ -20,7 +20,7 @@ from radar.enrich import Services, enrich
 from radar.models import ScoreResult, Sourced, StockData, to_jsonable, val
 from radar.notify import deliver
 from radar.providers import nasdaq, yahoo
-from radar.scoring import LEVEL_VIGILAR, score_stock
+from radar.scoring import LEVEL_NONE, LEVEL_VIGILAR, score_stock
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +85,8 @@ def _snapshot_row(cycle_id: int, data: StockData, result: ScoreResult) -> dict[s
         "level": result.level,
         "active_signals": ",".join(result.active_names),
         "data_blocked": int(data.data_blocked),
-        "payload": json.dumps(
+        # Full detail only when it may matter later: keeps the history file small.
+        "payload": None if result.level == LEVEL_NONE else json.dumps(
             {"data": to_jsonable(data), "score": to_jsonable(result)}, ensure_ascii=False
         ),
     }

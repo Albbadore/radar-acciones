@@ -66,6 +66,7 @@ def cmd_run(cfg: dict, args: argparse.Namespace) -> None:
     watcher = FastWatcher(svc.db, cfg) if cfg["fastwatch"]["enabled"] else None
     last_outcomes = datetime.min.replace(tzinfo=now_et().tzinfo)
     stop_at = time.time() + args.max_minutes * 60 if args.max_minutes else None
+    log.info("Historico compactado: %s", svc.db.compact())
     log.info("Radar en marcha. Ctrl+C para detener.")
     while True:
         now = now_et()
@@ -98,6 +99,7 @@ def cmd_run(cfg: dict, args: argparse.Namespace) -> None:
         if stop_at:
             deadline = min(deadline, stop_at)
         _fast_watch_until(watcher if scan else None, deadline, cfg)
+    svc.db.compact(vacuum=False)
     svc.db.close()
 
 
@@ -114,6 +116,7 @@ def cmd_once(cfg: dict, args: argparse.Namespace) -> None:
         log.info("Resultados posteriores actualizados: %d", outcomes.update_all(svc.db, now, cfg))
     except Exception as exc:
         log.warning("Actualizacion de resultados fallo: %s", exc)
+    log.info("Historico compactado: %s", svc.db.compact())
     svc.db.close()
 
 

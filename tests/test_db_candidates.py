@@ -57,3 +57,26 @@ def test_non_common_shares_excluded():
     warr = ScreenerRow("ABCW", "Abc Corp Warrant", 0.2, 0, None, 1, 1e6)
     common = ScreenerRow("ABC", "Abc Corp Common Stock", 2.0, 0, None, 1, 1e6)
     assert not in_universe(pref, UCFG) and not in_universe(warr, UCFG) and in_universe(common, UCFG)
+
+
+def test_compact_keeps_history_small():
+    """radar.db reached 104.7 MB (GitHub limit 100 MB): SIN ALERTA payloads were 98 %."""
+    db = Database(":memory:")
+    cid = db.insert_cycle(__import__("datetime").datetime(2026, 11, 2, 10), "regular")
+    rows = [
+        {"cycle_id": cid, "ts": "2026-11-02T10:00:00-05:00", "ticker": "A", "level": "SIN ALERTA",
+         "total": 30, "payload": "x" * 5000},
+        {"cycle_id": cid, "ts": "2026-11-02T10:00:00-05:00", "ticker": "B", "level": "VIGILAR",
+         "total": 55, "payload": "y" * 5000},
+        {"cycle_id": cid, "ts": "2020-01-01T10:00:00-05:00", "ticker": "OLD", "level": "VIGILAR",
+         "total": 55, "payload": "z"},
+    ]
+    db.insert_snapshots(rows)
+    db.upsert_daily_stats([{"session_date": f"2026-10-{d:02d}", "ticker": "A", "avg_volume_20d": 1.0}
+                           for d in range(1, 21)])
+    out = db.compact(keep_daily_sessions=7)
+    snaps = {r["ticker"]: r for r in db.query("SELECT ticker, payload FROM snapshots")}
+    assert snaps["A"]["payload"] is None and snaps["B"]["payload"] == "y" * 5000
+    assert "OLD" not in snaps
+    assert len(db.query("SELECT DISTINCT session_date FROM daily_stats")) == 7
+    assert out["payloads_vaciados"] == 1 and out["snapshots_borrados"] == 1

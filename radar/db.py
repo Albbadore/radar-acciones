@@ -169,6 +169,33 @@ class Database:
     def close(self) -> None:
         self._conn.close()
 
+    def compact(self, keep_snapshot_days: int = 60, keep_daily_sessions: int = 7,
+                vacuum: bool = True) -> dict[str, int]:
+        """Keep the database small enough to be stored in GitHub (< 100 MB file limit).
+
+        - Full JSON payload only for snapshots that reached VIGILAR or above
+          (SIN ALERTA rows keep their numeric columns for later analysis).
+        - Snapshots older than `keep_snapshot_days` are deleted (alerts are kept).
+        - Daily volume stats only for the last `keep_daily_sessions` sessions.
+        """
+        with self.tx() as c:
+            payloads = c.execute(
+                "UPDATE snapshots SET payload = NULL WHERE level = 'SIN ALERTA' AND payload IS NOT NULL"
+            ).rowcount
+            old = c.execute(
+                "DELETE FROM snapshots WHERE substr(ts, 1, 10) < date('now', ?)", (f"-{keep_snapshot_days} days",)
+            ).rowcount
+            c.execute("DELETE FROM cycles WHERE id NOT IN (SELECT DISTINCT cycle_id FROM snapshots) "
+                      "AND substr(ts, 1, 10) < date('now', ?)", (f"-{keep_snapshot_days} days",))
+            daily = c.execute(
+                "DELETE FROM daily_stats WHERE session_date NOT IN ("
+                "SELECT DISTINCT session_date FROM daily_stats ORDER BY session_date DESC LIMIT ?)",
+                (keep_daily_sessions,),
+            ).rowcount
+        if vacuum:
+            self._conn.execute("VACUUM")
+        return {"payloads_vaciados": payloads, "snapshots_borrados": old, "daily_borrados": daily}
+
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
         try:

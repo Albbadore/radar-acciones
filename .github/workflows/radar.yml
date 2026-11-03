@@ -7,6 +7,9 @@ name: Radar continuo
 # GitHub often delays or drops scheduled triggers, so they fire every 30 min:
 # only one slice runs at a time (concurrency) and a pending one starts as soon
 # as the current one ends. Outside market hours a slice exits in ~1 minute.
+#
+# History: data/radar.db is stored gzip-compressed in the radar-data branch
+# (GitHub rejects files > 100 MB), every 45 min and at the end of each slice.
 on:
   schedule:
     - cron: "*/30 * * * 1-5"
@@ -23,10 +26,12 @@ jobs:
   radar:
     runs-on: ubuntu-latest
     timeout-minutes: 355
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -39,7 +44,11 @@ jobs:
           mkdir -p data
           if git ls-remote --exit-code --heads origin radar-data >/dev/null; then
             git fetch --depth 1 origin radar-data
-            git show origin/radar-data:radar.db > data/radar.db
+            if git cat-file -e origin/radar-data:radar.db.gz 2>/dev/null; then
+              git show origin/radar-data:radar.db.gz | gunzip > data/radar.db
+            else
+              git show origin/radar-data:radar.db > data/radar.db   # legacy, uncompressed
+            fi
           fi
 
       - name: Radar
@@ -47,19 +56,15 @@ jobs:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m radar run --max-minutes 340 --exit-when-closed
+        run: |
+          # Intermediate saves so a failure never loses a whole slice.
+          ( while sleep 2700; do bash .github/scripts/save_history.sh || echo "Guardado intermedio fallido"; done ) &
+          saver=$!
+          status=0
+          python -m radar run --max-minutes 340 --exit-when-closed || status=$?
+          kill "$saver" 2>/dev/null || true
+          exit "$status"
 
       - name: Save history
         if: always()
-        run: |
-          [ -f data/radar.db ] || exit 0
-          python -c "import sqlite3; c=sqlite3.connect('data/radar.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
-          tmp=$(mktemp -d)
-          cp data/radar.db "$tmp/radar.db"
-          cd "$tmp"
-          git init -q -b radar-data
-          git config user.name "radar-bot"
-          git config user.email "radar-bot@users.noreply.github.com"
-          git add radar.db
-          git commit -q -m "data: $(date -u +%Y-%m-%dT%H:%MZ)"
-          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" radar-data
+        run: bash .github/scripts/save_history.sh
